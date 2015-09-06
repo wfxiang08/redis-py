@@ -1,3 +1,4 @@
+# -*- coding:utf-8 -*-
 from __future__ import with_statement
 from itertools import chain
 import datetime
@@ -9,8 +10,7 @@ import time as mod_time
 from redis._compat import (b, basestring, bytes, imap, iteritems, iterkeys,
                            itervalues, izip, long, nativestr, unicode,
                            safe_unicode)
-from redis.connection import (ConnectionPool, UnixDomainSocketConnection,
-                              SSLConnection, Token)
+from redis.connection import (ConnectionPool, UnixDomainSocketConnection, Token)
 from redis.lock import Lock, LuaLock
 from redis.exceptions import (
     ConnectionError,
@@ -28,6 +28,7 @@ SYM_EMPTY = b('')
 
 
 def list_or_args(keys, args):
+    # 将keys和args结合起来
     # returns a single list combining keys and args
     try:
         iter(keys)
@@ -288,11 +289,12 @@ class StrictRedis(object):
     Connection and Pipeline derive from this, implementing how
     the commands are sent and received to the Redis server
     """
+    # 定义了OP到Callback之间的映射
     RESPONSE_CALLBACKS = dict_merge(
         string_keys_to_dict(
             'AUTH EXISTS EXPIRE EXPIREAT HEXISTS HMSET MOVE MSETNX PERSIST '
             'PSETEX RENAMENX SISMEMBER SMOVE SETEX SETNX',
-            bool
+            bool # 有些结果是BOOL型的，需要专门处理
         ),
         string_keys_to_dict(
             'BITCOUNT BITPOS DECRBY DEL GETBIT HDEL HLEN INCRBY LINSERT LLEN '
@@ -395,20 +397,20 @@ class StrictRedis(object):
                  socket_connect_timeout=None,
                  socket_keepalive=None, socket_keepalive_options=None,
                  connection_pool=None, unix_socket_path=None,
+
                  encoding='utf-8', encoding_errors='strict',
-                 charset=None, errors=None,
-                 decode_responses=False, retry_on_timeout=False,
-                 ssl=False, ssl_keyfile=None, ssl_certfile=None,
-                 ssl_cert_reqs=None, ssl_ca_certs=None):
+                 decode_responses=False, retry_on_timeout=False):
+
+        # 如果给定了connection_pool, 则不用考虑用户名、密码等
         if not connection_pool:
-            if charset is not None:
-                warnings.warn(DeprecationWarning(
-                    '"charset" is deprecated. Use "encoding" instead'))
-                encoding = charset
-            if errors is not None:
-                warnings.warn(DeprecationWarning(
-                    '"errors" is deprecated. Use "encoding_errors" instead'))
-                encoding_errors = errors
+            # if charset is not None:
+            #     warnings.warn(DeprecationWarning(
+            #         '"charset" is deprecated. Use "encoding" instead'))
+            #     encoding = charset
+            # if errors is not None:
+            #     warnings.warn(DeprecationWarning(
+            #         '"errors" is deprecated. Use "encoding_errors" instead'))
+            #     encoding_errors = errors
 
             kwargs = {
                 'db': db,
@@ -419,6 +421,8 @@ class StrictRedis(object):
                 'decode_responses': decode_responses,
                 'retry_on_timeout': retry_on_timeout
             }
+
+            # 通过socket来处理
             # based on input, setup appropriate connection args
             if unix_socket_path is not None:
                 kwargs.update({
@@ -435,18 +439,19 @@ class StrictRedis(object):
                     'socket_keepalive_options': socket_keepalive_options,
                 })
 
-                if ssl:
-                    kwargs.update({
-                        'connection_class': SSLConnection,
-                        'ssl_keyfile': ssl_keyfile,
-                        'ssl_certfile': ssl_certfile,
-                        'ssl_cert_reqs': ssl_cert_reqs,
-                        'ssl_ca_certs': ssl_ca_certs,
-                    })
+                # 暂不考虑SSL
+                # if ssl:
+                #     kwargs.update({
+                #         'connection_class': SSLConnection,
+                #         'ssl_keyfile': ssl_keyfile,
+                #         'ssl_certfile': ssl_certfile,
+                #         'ssl_cert_reqs': ssl_cert_reqs,
+                #         'ssl_ca_certs': ssl_ca_certs,
+                #     })
             connection_pool = ConnectionPool(**kwargs)
+
         self.connection_pool = connection_pool
         self._use_lua_lock = None
-
         self.response_callbacks = self.__class__.RESPONSE_CALLBACKS.copy()
 
     def __repr__(self):
@@ -561,15 +566,27 @@ class StrictRedis(object):
 
     # COMMAND EXECUTION AND PROTOCOL PARSING
     def execute_command(self, *args, **options):
-        "Execute a command and return a parsed response"
+        """Execute a command and return a parsed response
+
+        如何执行Command呢?
+        """
         pool = self.connection_pool
         command_name = args[0]
+
+        # 1. 获取一个connection
         connection = pool.get_connection(command_name, **options)
         try:
+            # 正常尝试
             connection.send_command(*args)
+
+            # 解析返回(等待处理)
             return self.parse_response(connection, command_name, **options)
+
         except (ConnectionError, TimeoutError) as e:
+            # 如果失败，则断开连接，准备重新连接
             connection.disconnect()
+
+            # 如果是timeout, 是否重试呢?
             if not connection.retry_on_timeout and isinstance(e, TimeoutError):
                 raise
             connection.send_command(*args)
@@ -579,8 +596,13 @@ class StrictRedis(object):
 
     def parse_response(self, connection, command_name, **options):
         "Parses a response from the Redis server"
+
+        # 读取Response
         response = connection.read_response()
+
+        # 对Response进行处理
         if command_name in self.response_callbacks:
+            # 通过callback来进一步解析数据
             return self.response_callbacks[command_name](response, **options)
         return response
 

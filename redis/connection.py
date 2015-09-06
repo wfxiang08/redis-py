@@ -1,3 +1,4 @@
+# -*- coding:utf-8 -*-
 from __future__ import with_statement
 from distutils.version import StrictVersion
 from itertools import chain
@@ -8,11 +9,6 @@ import sys
 import threading
 import warnings
 
-try:
-    import ssl
-    ssl_available = True
-except ImportError:
-    ssl_available = False
 
 from redis._compat import (b, xrange, imap, byte_to_chr, unicode, bytes, long,
                            BytesIO, nativestr, basestring, iteritems,
@@ -203,8 +199,10 @@ class PythonParser(BaseParser):
 
     def on_connect(self, connection):
         "Called when the socket connects"
+        # 设置_sock和_buffer
         self._sock = connection._sock
         self._buffer = SocketBuffer(self._sock, self.socket_read_size)
+
         if connection.decode_responses:
             self.encoding = connection.encoding
 
@@ -219,9 +217,12 @@ class PythonParser(BaseParser):
         self.encoding = None
 
     def can_read(self):
+        # _buffer中有数据
         return self._buffer and bool(self._buffer.length)
 
     def read_response(self):
+        # 读取一行数据
+        # 将数据解码出来，成为一个完整的Response
         response = self._buffer.readline()
         if not response:
             raise ConnectionError(SERVER_CLOSED_CONNECTION_ERROR)
@@ -381,7 +382,9 @@ else:
 
 
 class Connection(object):
-    "Manages TCP communication to and from a Redis server"
+    """Manages TCP communication to and from a Redis server
+        如何维持和redis之间可靠的长连接呢?
+    """
     description_format = "Connection<host=%(host)s,port=%(port)s,db=%(db)s>"
 
     def __init__(self, host='localhost', port=6379, db=0, password=None,
@@ -390,21 +393,27 @@ class Connection(object):
                  retry_on_timeout=False, encoding='utf-8',
                  encoding_errors='strict', decode_responses=False,
                  parser_class=DefaultParser, socket_read_size=65536):
+
         self.pid = os.getpid()
         self.host = host
         self.port = int(port)
         self.db = db
+
         self.password = password
+
         self.socket_timeout = socket_timeout
         self.socket_connect_timeout = socket_connect_timeout or socket_timeout
         self.socket_keepalive = socket_keepalive
         self.socket_keepalive_options = socket_keepalive_options or {}
         self.retry_on_timeout = retry_on_timeout
+
         self.encoding = encoding
         self.encoding_errors = encoding_errors
         self.decode_responses = decode_responses
+
         self._sock = None
         self._parser = parser_class(socket_read_size=socket_read_size)
+
         self._description_args = {
             'host': self.host,
             'port': self.port,
@@ -429,8 +438,11 @@ class Connection(object):
 
     def connect(self):
         "Connects to the Redis server if not already connected"
+
+        # _sock表示存在连接
         if self._sock:
             return
+
         try:
             sock = self._connect()
         except socket.error:
@@ -447,6 +459,7 @@ class Connection(object):
 
         # run any user callbacks. right now the only internal callback
         # is for pubsub channel/pattern resubscription
+        # 在建立连接之后立即执行: Callback, 例如: AUTH
         for callback in self._connect_callbacks:
             callback(self)
 
@@ -455,22 +468,30 @@ class Connection(object):
         # we want to mimic what socket.create_connection does to support
         # ipv4/ipv6, but we want to set options prior to calling
         # socket.connect()
+        # 如何创建一个TCP Socket Connection呢?
         err = None
-        for res in socket.getaddrinfo(self.host, self.port, 0,
-                                      socket.SOCK_STREAM):
+        for res in socket.getaddrinfo(self.host, self.port, 0, socket.SOCK_STREAM):
             family, socktype, proto, canonname, socket_address = res
             sock = None
+
             try:
                 sock = socket.socket(family, socktype, proto)
                 # TCP_NODELAY
+                # https://access.redhat.com/documentation/en-US/Red_Hat_Enterprise_MRG/1.2/html/Realtime_Tuning_Guide/sect-Realtime_Tuning_Guide-Application_Tuning_and_Deployment-TCP_NODELAY_and_Small_Buffer_Writes.html
+                # 小的数据包也理解处理
+                # 一般一个数据包也差不多够处理所有的Redis请求了
+                #
                 sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
                 # TCP_KEEPALIVE
+                # KeepAlive作用
+                # http://fpcfjf.blog.163.com/blog/static/5546979320118277946593/
                 if self.socket_keepalive:
                     sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
                     for k, v in iteritems(self.socket_keepalive_options):
                         sock.setsockopt(socket.SOL_TCP, k, v)
 
+                # 默认都是没有Timeout的?
                 # set the socket_connect_timeout before we connect
                 sock.settimeout(self.socket_connect_timeout)
 
@@ -532,11 +553,14 @@ class Connection(object):
         "Send an already packed command to the Redis server"
         if not self._sock:
             self.connect()
+
+        # 通过_sock发送COMMAND(command就是一组byte[])
         try:
             if isinstance(command, str):
                 command = [command]
             for item in command:
                 self._sock.sendall(item)
+        # 在批量发送commands时，遇到异常如何处理呢?
         except socket.timeout:
             self.disconnect()
             raise TimeoutError("Timeout writing to socket")
@@ -563,12 +587,15 @@ class Connection(object):
         if not sock:
             self.connect()
             sock = self._sock
+
         return self._parser.can_read() or \
             bool(select([sock], [], [], timeout)[0])
 
     def read_response(self):
         "Read the response from a previously sent command"
         try:
+            # 通过_parser来读取Response
+            # 而不是一个个byte?
             response = self._parser.read_response()
         except:
             self.disconnect()
@@ -590,6 +617,7 @@ class Connection(object):
         elif not isinstance(value, basestring):
             value = str(value)
         if isinstance(value, unicode):
+            # 采用utf8编码来处理(对象在进出Redis前后的编码可能发生变化)
             value = value.encode(self.encoding, self.encoding_errors)
         return value
 
@@ -607,15 +635,18 @@ class Connection(object):
         else:
             args = (Token(command),) + args[1:]
 
-        buff = SYM_EMPTY.join(
-            (SYM_STAR, b(str(len(args))), SYM_CRLF))
+        # 第一行:
+        # 参数的个数
+        buff = SYM_EMPTY.join((SYM_STAR, b(str(len(args))), SYM_CRLF))
 
+        # 所有的参数统一编码为byte[]
         for arg in imap(self.encode, args):
             # to avoid large string mallocs, chunk the command into the
             # output list if we're sending large values
             if len(buff) > 6000 or len(arg) > 6000:
-                buff = SYM_EMPTY.join(
-                    (buff, SYM_DOLLAR, b(str(len(arg))), SYM_CRLF))
+                # 复杂字符串处理
+                buff = SYM_EMPTY.join((buff, SYM_DOLLAR, b(str(len(arg))), SYM_CRLF))
+                # 通过LIST来缓存字符串片段，避免低效的字符串操作
                 output.append(buff)
                 output.append(arg)
                 buff = SYM_CRLF
@@ -636,6 +667,7 @@ class Connection(object):
                 pieces.append(chunk)
                 buffer_length += len(chunk)
 
+            # 为什么一直放在pieces中呢?
             if buffer_length > 6000:
                 output.append(SYM_EMPTY.join(pieces))
                 buffer_length = 0
@@ -645,44 +677,6 @@ class Connection(object):
             output.append(SYM_EMPTY.join(pieces))
         return output
 
-
-class SSLConnection(Connection):
-    description_format = "SSLConnection<host=%(host)s,port=%(port)s,db=%(db)s>"
-
-    def __init__(self, ssl_keyfile=None, ssl_certfile=None, ssl_cert_reqs=None,
-                 ssl_ca_certs=None, **kwargs):
-        if not ssl_available:
-            raise RedisError("Python wasn't built with SSL support")
-
-        super(SSLConnection, self).__init__(**kwargs)
-
-        self.keyfile = ssl_keyfile
-        self.certfile = ssl_certfile
-        if ssl_cert_reqs is None:
-            ssl_cert_reqs = ssl.CERT_NONE
-        elif isinstance(ssl_cert_reqs, basestring):
-            CERT_REQS = {
-                'none': ssl.CERT_NONE,
-                'optional': ssl.CERT_OPTIONAL,
-                'required': ssl.CERT_REQUIRED
-            }
-            if ssl_cert_reqs not in CERT_REQS:
-                raise RedisError(
-                    "Invalid SSL Certificate Requirements Flag: %s" %
-                    ssl_cert_reqs)
-            ssl_cert_reqs = CERT_REQS[ssl_cert_reqs]
-        self.cert_reqs = ssl_cert_reqs
-        self.ca_certs = ssl_ca_certs
-
-    def _connect(self):
-        "Wrap the socket with SSL support"
-        sock = super(SSLConnection, self)._connect()
-        sock = ssl.wrap_socket(sock,
-                               cert_reqs=self.cert_reqs,
-                               keyfile=self.keyfile,
-                               certfile=self.certfile,
-                               ca_certs=self.ca_certs)
-        return sock
 
 
 class UnixDomainSocketConnection(Connection):
@@ -817,9 +811,6 @@ class ConnectionPool(object):
                 except (AttributeError, ValueError):
                     pass
 
-            if url.scheme == 'rediss':
-                url_options['connection_class'] = SSLConnection
-
         # last shot at the db value
         url_options['db'] = int(url_options.get('db', db or 0))
 
@@ -913,123 +904,4 @@ class ConnectionPool(object):
         all_conns = chain(self._available_connections,
                           self._in_use_connections)
         for connection in all_conns:
-            connection.disconnect()
-
-
-class BlockingConnectionPool(ConnectionPool):
-    """
-    Thread-safe blocking connection pool::
-
-        >>> from redis.client import Redis
-        >>> client = Redis(connection_pool=BlockingConnectionPool())
-
-    It performs the same function as the default
-    ``:py:class: ~redis.connection.ConnectionPool`` implementation, in that,
-    it maintains a pool of reusable connections that can be shared by
-    multiple redis clients (safely across threads if required).
-
-    The difference is that, in the event that a client tries to get a
-    connection from the pool when all of connections are in use, rather than
-    raising a ``:py:class: ~redis.exceptions.ConnectionError`` (as the default
-    ``:py:class: ~redis.connection.ConnectionPool`` implementation does), it
-    makes the client wait ("blocks") for a specified number of seconds until
-    a connection becomes available.
-
-    Use ``max_connections`` to increase / decrease the pool size::
-
-        >>> pool = BlockingConnectionPool(max_connections=10)
-
-    Use ``timeout`` to tell it either how many seconds to wait for a connection
-    to become available, or to block forever:
-
-        # Block forever.
-        >>> pool = BlockingConnectionPool(timeout=None)
-
-        # Raise a ``ConnectionError`` after five seconds if a connection is
-        # not available.
-        >>> pool = BlockingConnectionPool(timeout=5)
-    """
-    def __init__(self, max_connections=50, timeout=20,
-                 connection_class=Connection, queue_class=LifoQueue,
-                 **connection_kwargs):
-
-        self.queue_class = queue_class
-        self.timeout = timeout
-        super(BlockingConnectionPool, self).__init__(
-            connection_class=connection_class,
-            max_connections=max_connections,
-            **connection_kwargs)
-
-    def reset(self):
-        self.pid = os.getpid()
-        self._check_lock = threading.Lock()
-
-        # Create and fill up a thread safe queue with ``None`` values.
-        self.pool = self.queue_class(self.max_connections)
-        while True:
-            try:
-                self.pool.put_nowait(None)
-            except Full:
-                break
-
-        # Keep a list of actual connection instances so that we can
-        # disconnect them later.
-        self._connections = []
-
-    def make_connection(self):
-        "Make a fresh connection."
-        connection = self.connection_class(**self.connection_kwargs)
-        self._connections.append(connection)
-        return connection
-
-    def get_connection(self, command_name, *keys, **options):
-        """
-        Get a connection, blocking for ``self.timeout`` until a connection
-        is available from the pool.
-
-        If the connection returned is ``None`` then creates a new connection.
-        Because we use a last-in first-out queue, the existing connections
-        (having been returned to the pool after the initial ``None`` values
-        were added) will be returned before ``None`` values. This means we only
-        create new connections when we need to, i.e.: the actual number of
-        connections will only increase in response to demand.
-        """
-        # Make sure we haven't changed process.
-        self._checkpid()
-
-        # Try and get a connection from the pool. If one isn't available within
-        # self.timeout then raise a ``ConnectionError``.
-        connection = None
-        try:
-            connection = self.pool.get(block=True, timeout=self.timeout)
-        except Empty:
-            # Note that this is not caught by the redis client and will be
-            # raised unless handled by application code. If you want never to
-            raise ConnectionError("No connection available.")
-
-        # If the ``connection`` is actually ``None`` then that's a cue to make
-        # a new connection to add to the pool.
-        if connection is None:
-            connection = self.make_connection()
-
-        return connection
-
-    def release(self, connection):
-        "Releases the connection back to the pool."
-        # Make sure we haven't changed process.
-        self._checkpid()
-        if connection.pid != self.pid:
-            return
-
-        # Put the connection back into the pool.
-        try:
-            self.pool.put_nowait(connection)
-        except Full:
-            # perhaps the pool has been reset() after a fork? regardless,
-            # we don't want this connection
-            pass
-
-    def disconnect(self):
-        "Disconnects all connections in the pool."
-        for connection in self._connections:
             connection.disconnect()

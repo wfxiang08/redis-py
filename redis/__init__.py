@@ -1,3 +1,4 @@
+# -*- coding:utf-8 -*-
 from redis.client import Redis, StrictRedis
 from redis.connection import (
     BlockingConnectionPool,

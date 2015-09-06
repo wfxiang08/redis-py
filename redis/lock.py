@@ -1,3 +1,4 @@
+# -*- coding:utf-8 -*-
 import threading
 import time as mod_time
 import uuid
@@ -8,6 +9,7 @@ from redis._compat import b
 
 class Lock(object):
     """
+    通过Redis实现一个分布式的锁
     A shared, distributed Lock. Using Redis for locking allows the Lock
     to be shared across processes and/or machines.
 
