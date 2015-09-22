@@ -1,3 +1,4 @@
+/.idea
 *.pyc
 redis.egg-info
 build/
